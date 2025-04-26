@@ -8,14 +8,20 @@ dependencies = [
     "editdistance>=0.8.1",
     "fire>=0.7.0",
     "polars>=1.25.2",
+    "rank-bm25>=0.2.2",
     "ranx>=0.3.20",
+    "safetensors>=0.5.3",
     "scikit-learn>=1.6.1",
     "scipy>=1.15.2",
+    "torch>=2.7.0",
+    "torchvision>=0.22.0",
     "tqdm>=4.67.1",
+    "transformers>=4.51.3",
 ]
 
 [dependency-groups]
 dev = [
+    "huggingface-hub[cli]>=0.30.2",
     "ipykernel>=6.29.5",
     "ipython>=9.0.2",
     "pandas>=2.2.3",

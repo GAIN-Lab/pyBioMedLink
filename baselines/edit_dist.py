@@ -8,7 +8,7 @@ from tqdm.auto import tqdm
 
 def run(
     dataset: str = './med_link_datasets/IfMedLink-name.csv',
-    output: str = './exps/edit_dist_If_name_result.csv',
+    output: str = './exps/name-only/edit_dist_If_name_result.csv',
 ):
     df = pl.read_csv(dataset)
     targets = df['med_name_generic'].to_list()
@@ -26,8 +26,8 @@ def run(
         for target in targets:
             dist = editdistance.eval(input, target)
             heappush(h, (dist, target))
-        # get top 20
-        topk = nsmallest(20, h)
+        # get top 50
+        topk = nsmallest(50, h)
         # min-max inverted norm
         topk_dists = [_[0] for _ in topk]
         min_dist = min(topk_dists)
@@ -41,7 +41,7 @@ def run(
     qrels = Qrels(qrels_dict)
     run = Run(run_dict)
     # evaluate
-    metrics = evaluate(qrels, run, ['hit_rate@1', 'hit_rate@5', 'mrr@10', 'mrr@20'])
+    metrics = evaluate(qrels, run, ['hit_rate@1', 'hit_rate@5', 'mrr@10', 'mrr@50'])
     print(metrics)
     # save metrics
     metrics['dataset'] = dataset
