@@ -1,5 +1,3 @@
-# Ped-Med-Link
-Medication Name Linking on Pediatric EHR
+# pyMedLink
 
-
-## Exp Results
+*pyMedLink* is an open-source python library for medical concept linking.

@@ -1,7 +1,7 @@
 [project]
-name = "ped-med-link"
+name = "pyMedLink"
 version = "0.1.0"
-description = "Add your description here"
+description = "pyMedLink for Medical Concept Linking."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,6 +17,12 @@ dependencies = [
     "torchvision>=0.22.0",
     "tqdm>=4.67.1",
     "transformers>=4.51.3",
+]
+authors = [
+  {name = "Jiaying Lu"},
+]
+maintainers = [
+    {email = "jiaying.lu@emory.edu"}
 ]
 
 [dependency-groups]
