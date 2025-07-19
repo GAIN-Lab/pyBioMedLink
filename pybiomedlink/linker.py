@@ -383,12 +383,11 @@ From the list of Biodomains, choose the **top {top_k}** labels that best fit thi
         if enable_thinking == True:
             generation_config = model.generation_config
         else:
-            generation_config = GenerationConfig(
-                temperature=0.7,
-                top_p=0.8,
-                top_k=20,
-                min_probability=0.0,
-            )
+            generation_config = model.generation_config
+            generation_config.temperature = 0.7
+            generation_config.top_p = 0.8
+            generation_config.top_k = 20
+            generation_config.min_probability = 0.0
 
         # conduct text completion
         generated_ids = model.generate(
