@@ -23,6 +23,9 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
+[project.urls]
+Repository = "https://github.com/GAIN-Lab/pyBioMedLink"
+
 [dependency-groups]
 dev = [
     "pytest>=8.4.1",

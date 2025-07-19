@@ -1,4 +1,7 @@
 # pyBioMedLink
+[![PyPI version](https://img.shields.io/pypi/v/pyBioMedLink)](https://pypi.org/project/pyBioMedLink/)
+![License](https://img.shields.io/pypi/l/pyBioMedLink)
+![Python versions](https://img.shields.io/pypi/pyversions/pyBioMedLink)
 
 *pyBioMedLink* is an open-source python library for bio-medical term linking.
 
