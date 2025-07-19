@@ -27,7 +27,7 @@ def test_Qwen3Prompt_predict_aux():
     assert "labels" in predictions, "Expected keys 'labels' in predictions"
 
     # unable thinking mode
-    predictions = linker.predict_aux(query, top_k, thinking_mode=False)
+    predictions = linker.predict_aux(query, top_k, enable_thinking=False)
     print(f"[NO-Thinking] Predictions for query '{query}': {predictions}")
     assert isinstance(predictions, dict)
     assert len(predictions["labels"]) == top_k, "Expected number of predictions does not match top_k"
