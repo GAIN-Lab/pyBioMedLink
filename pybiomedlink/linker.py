@@ -1,5 +1,11 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
+import json
+
+from tqdm.auto import tqdm
+from rank_bm25 import BM25Okapi
+import torch as th
+from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM, GenerationConfig
 
 
 class BaseZSLinker(ABC):
@@ -48,12 +54,11 @@ class BM25Linker(BaseZSLinker):
         Args:
             labels (List[str]): List of labels/entities to link against.
         """
-        from rank_bm25 import BM25Okapi
         tokenized_labels = [BM25Linker.tokenize(label) for label in labels]
         self.labels = labels
         self.model = BM25Okapi(tokenized_labels)
 
-    def predict(self, query: str, top_k: int = 10) -> List[str]:
+    def predict(self, query: str, top_k: int = 5) -> List[str]:
         """
         Predict the top-k linked entities for a given query.
         
@@ -66,7 +71,7 @@ class BM25Linker(BaseZSLinker):
         tokenized_query = BM25Linker.tokenize(query)
         return self.model.get_top_n(tokenized_query, self.labels, n=top_k)
 
-    def predict_aux(self, query: str, top_k: int = 10) -> Dict[str, Any]:
+    def predict_aux(self, query: str, top_k: int = 5) -> Dict[str, Any]:
         tokenized_query = BM25Linker.tokenize(query)
         label_scores = self.model.get_scores(tokenized_query)
         top_indices = label_scores.argsort(stable=True)[-top_k:][::-1]
@@ -203,7 +208,8 @@ class LevenshteinLinker(BaseZSLinker):
         """
         self.labels = labels
     
-    def predict(self, query: str, top_k: int = 10) -> List[str]:
+    def predict(self, query: str, top_k: int = 5) -> List[str]:
+        """
         lev_distances = [
             (label, LevenshteinLinker.edit_distance(query, label))
             for label in self.labels
@@ -212,8 +218,11 @@ class LevenshteinLinker(BaseZSLinker):
         lev_distances.sort(key=lambda x: x[1])
         # Return the top-k labels
         return [label for label, _ in lev_distances[:top_k]]
+        """
+        results = self.predict_aux(query, top_k)
+        return results["labels"]
 
-    def predict_aux(self, query: str, top_k: int = 10) -> Dict[str, Any]:
+    def predict_aux(self, query: str, top_k: int = 5) -> Dict[str, Any]:
         lev_distances = [
             (label, LevenshteinLinker.edit_distance(query, label))
             for label in self.labels
@@ -223,5 +232,199 @@ class LevenshteinLinker(BaseZSLinker):
         results = {
             "labels": [label for label, _ in lev_distances[:top_k]],
             "scores": [distance for _, distance in lev_distances[:top_k]]
+        }
+        return results
+
+
+class TransformerEmbLinker(BaseZSLinker):
+    """
+    Transformer-based zero-shot linker.
+    """
+    def __init__(
+            self, 
+            labels: List[str],
+            model_name: str = "cambridgeltl/SapBERT-from-PubMedBERT-fulltext", 
+            batch_size: int = 16
+        ):
+        # prepare models
+        self.device = th.device("cuda" if th.cuda.is_available() else "cpu")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModel.from_pretrained(model_name)
+        self.model.to(self.device)
+        self.model.eval()
+        print(f'Using device: {self.device}. Model: {model_name} loaded.')
+        # prepare embeddings of labels
+        self.labels = labels
+        self.label_embs = []
+        self.bs = batch_size
+        for i in tqdm(range(0, len(labels), self.bs)):
+            batch = labels[i : i + self.bs]
+            outputs = self._get_embs(batch)
+            self.label_embs.append(outputs.last_hidden_state[:, 0, :].cpu().detach())
+        self.label_embs = th.cat(self.label_embs, dim=0)
+        print(f'Label embs shape: {self.label_embs.shape}')
+
+    def _get_embs(self, batch: List[str]) -> th.Tensor:
+        assert isinstance(batch, list), "Input batch must be a list of strings."
+        inputs = self.tokenizer(batch, padding=True, truncation=False, return_tensors="pt").to(self.device)
+        with th.no_grad():
+            outputs = self.model(**inputs)
+        return outputs
+        
+    def predict(self, query: str, top_k: int = 5) -> List[str]:
+        results = self.predict_aux(query, top_k)
+        return results["labels"]
+        
+    def predict_aux(self, query: str, top_k: int = 5) -> Dict[str, Any]:
+        query_emb = self._get_embs([query]).last_hidden_state[:, 0, :].cpu().detach()  # shape: (1, emb_dim)
+        # Calculate cosine similarities
+        similarities = th.nn.functional.cosine_similarity(query_emb, self.label_embs)   # shape: (num_labels,)
+        # Get top-k indices
+        topk_ret = th.topk(similarities, k=top_k)
+        results = {
+            "labels": [self.labels[i] for i in topk_ret.indices],
+            "scores": topk_ret.values.cpu().tolist()
+        }
+        return results
+
+
+class Qwen3PromptLinker(BaseZSLinker):
+    """
+    Language Model Prompt-based zero-shot linker.
+    
+    This linker uses a language model and pre-defined prompts for linking biomedical terms.
+    """
+    @staticmethod
+    def GO_BioDomainPrompt(query: str, labels: List[str], top_k: int) -> str:
+        """
+        Generate a prompt for the GO BioDomain task.
+        
+        Args:
+            query (str): The input query to link.
+            labels (List[str]): List of labels/entities to link against.
+        Returns:
+            str: The generated prompt.
+        """
+        domains_str = "\n".join(f"- {d}" for d in labels)
+        prompt = f"""
+        You are a biomedical ontology expert.  
+Below is a GO term.  
+From the list of Biodomains, choose the **top {top_k}** labels that best fit this term—ranked most-to-least appropriate.  
+**Do not** ever reply “Unknown”, and **do not** return more or fewer than five.  
+**List only** the domain names, **without** any numbering, bullets, or additional text.
+
+**Biodomain options:**
+{domains_str}
+
+**GO Term:** {query}  
+
+**Output** your answer strictly in the following JSON format, in descending order of relevance:
+```json
+["Domain1", "Domain2", ..., "Domain{top_k}"]
+```
+"""
+        return prompt
+
+    def __init__(self, labels: List[str], model_name: str = 'Qwen/Qwen3-0.6B'):
+        assert model_name.startswith("Qwen"), "Model name must start with 'Qwen'"
+        self.labels = labels
+        self.model_name = model_name
+        # Initialize the model and tokenizer here if needed
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype="auto",
+            device_map="auto"
+        )
+        self.max_new_tokens = 32768
+        print(f'Model {model_name} loaded for LMPromptLinker.')
+
+    def predict(
+            self, 
+            query: str, 
+            top_k: int = 5, 
+            prompt_template: str = "GO_BioDomainPrompt",
+            enable_thinking: bool = True,
+        ) -> List[str]:
+        results = self.predict_aux(query, top_k, prompt_template, enable_thinking)
+        return results["labels"]
+
+
+    def predict_aux(
+            self, 
+            query: str, 
+            top_k: int = 5,
+            prompt_template: str = "GO_BioDomainPrompt",
+            enable_thinking: bool = True,
+        ) -> Dict[str, Any]:
+        """
+        LLM can not return a list of labels with **scores**.
+        """
+        # TODO: support user-defined prompts
+        if prompt_template == "GO_BioDomainPrompt":
+            prompt = self.GO_BioDomainPrompt(query, self.labels, top_k)
+        else:
+            raise ValueError(f"Unknown prompt template: {prompt_template}")
+        print(f'Generated prompt:\n{prompt}')
+        # prepare arguments
+        model = self.model
+        tokenizer = self.tokenizer
+        max_new_tokens = self.max_new_tokens
+        # do inference
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=enable_thinking
+        )
+        model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+        # best practise params:
+        if enable_thinking == True:
+            generation_config = model.generation_config
+        else:
+            generation_config = GenerationConfig(
+                temperature=0.7,
+                top_p=0.8,
+                top_k=20,
+                min_probability=0.0,
+            )
+
+        # conduct text completion
+        generated_ids = model.generate(
+            **model_inputs,
+            max_new_tokens=max_new_tokens,
+            generation_config=generation_config,
+        )
+        output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
+
+        # parsing thinking content
+        try:
+            # rindex finding 151668 (</think>)
+            index = len(output_ids) - output_ids[::-1].index(151668)
+        except ValueError:
+            index = 0
+
+        thinking_content = tokenizer.decode(output_ids[:index], skip_special_tokens=True).strip("\n")
+        content = tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip("\n")
+        #print("thinking content:", thinking_content)
+        #print("content:", content)
+
+        # parse the content
+        error_msg = ""
+        try:
+            parsed_content = json.loads(content)
+        except json.JSONDecodeError as e:
+            print(f"Error parsing JSON content: {e}")
+            parsed_content = []
+            error_msg = str(e)
+        
+        results = {
+            "labels": parsed_content,
+            "thinking_content": thinking_content,
+            "content": content,
+            "error_msg": error_msg
         }
         return results
