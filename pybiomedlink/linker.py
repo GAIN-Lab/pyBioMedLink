@@ -319,9 +319,7 @@ From the list of Biodomains, choose the **top {top_k}** labels that best fit thi
 **GO Term:** {query}  
 
 **Output** your answer strictly in the following JSON format, in descending order of relevance:
-```json
 ["Domain1", "Domain2", ..., "Domain{top_k}"]
-```
 """
         return prompt
 
@@ -365,7 +363,7 @@ From the list of Biodomains, choose the **top {top_k}** labels that best fit thi
             prompt = self.GO_BioDomainPrompt(query, self.labels, top_k)
         else:
             raise ValueError(f"Unknown prompt template: {prompt_template}")
-        print(f'Generated prompt:\n{prompt}')
+        #print(f'Generated prompt:\n{prompt}')
         # prepare arguments
         model = self.model
         tokenizer = self.tokenizer
