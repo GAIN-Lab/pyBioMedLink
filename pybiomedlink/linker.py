@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
+import random
 import json
 
 from tqdm.auto import tqdm
@@ -28,6 +29,33 @@ class BaseZSLinker(ABC):
         This can include additional scores or other information.
         """
         pass
+
+
+class RandomLinker(BaseZSLinker):
+    """
+    Random zero-shot linker.
+    """
+    def __init__(self, labels: List[str], seed: int = 42):
+        """
+        Args:
+            labels (List[str]): List of labels/entities to link against.
+        """
+        self.labels = labels
+        self.rng = random.Random(seed)  # fixed seed for reproducibility
+    
+    def predict(self, query: str, top_k: int) -> List[str]:
+        """
+        Predict the top-k linked entities/labels for a given query.
+        """
+        return self.rng.sample(self.labels, k=top_k)
+
+    def predict_aux(self, query: str, top_k: int = 5) -> Dict[str, Any]:
+        preds = self.predict(query, top_k)
+        result = {
+            "labels": preds,
+            "scores": [1.0 for i in top_k]
+        }
+        return result
 
 
 class BM25Linker(BaseZSLinker):
@@ -267,7 +295,7 @@ class TransformerEmbLinker(BaseZSLinker):
     def _get_embs(self, batch: List[str]) -> th.Tensor:
         assert isinstance(batch, list), "Input batch must be a list of strings."
         inputs = self.tokenizer(batch, padding=True, truncation=False, return_tensors="pt").to(self.device)
-        with th.no_grad():
+        with th.inference_mode():
             outputs = self.model(**inputs)
         return outputs
         
@@ -306,8 +334,7 @@ class Qwen3PromptLinker(BaseZSLinker):
             str: The generated prompt.
         """
         domains_str = "\n".join(f"- {d}" for d in labels)
-        prompt = f"""
-        You are a biomedical ontology expert.  
+        prompt = f"""You are a biomedical ontology expert.  
 Below is a GO term.  
 From the list of Biodomains, choose the **top {top_k}** labels that best fit this term—ranked most-to-least appropriate.  
 **Do not** ever reply “Unknown”, and **do not** return more or fewer than five.  
@@ -334,6 +361,7 @@ From the list of Biodomains, choose the **top {top_k}** labels that best fit thi
             torch_dtype="auto",
             device_map="auto"
         )
+        self.model.eval()
         self.max_new_tokens = 32768
         print(f'Model {model_name} loaded for LMPromptLinker.')
 
@@ -390,11 +418,12 @@ From the list of Biodomains, choose the **top {top_k}** labels that best fit thi
             generation_config.min_probability = 0.0
 
         # conduct text completion
-        generated_ids = model.generate(
-            **model_inputs,
-            max_new_tokens=max_new_tokens,
-            generation_config=generation_config,
-        )
+        with th.inference_mode():
+            generated_ids = model.generate(
+                **model_inputs,
+                max_new_tokens=max_new_tokens,
+                generation_config=generation_config,
+            )
         output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
 
         # parsing thinking content
